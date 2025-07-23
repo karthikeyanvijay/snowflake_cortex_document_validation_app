@@ -1,0 +1,9 @@
+name: frostlogic_streamlit
+channels:
+  - snowflake
+dependencies:
+  - streamlit
+  - pandas
+  - numpy
+  - snowflake-snowpark-python
+  - plotly

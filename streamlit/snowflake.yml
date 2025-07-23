@@ -1,0 +1,19 @@
+definition_version: '2'
+
+entities:
+  frostlogic_app:
+    type: streamlit
+    identifier:
+      name: FROSTLOGIC_STREAMLIT_APP
+      database: FROSTLOGIC_DB
+      schema: PUBLIC
+    stage: STREAMLIT_STAGE
+    query_warehouse: FROSTLOGIC_WH
+    main_file: streamlit_app.py
+    pages_dir: pages
+    title: "Snowflake Cortex - Document Validation App"
+    artifacts:
+      - streamlit_app.py
+      - environment.yml
+      - pages/01_Configuration.py
+      - pages/02_Upload_Files.py 
