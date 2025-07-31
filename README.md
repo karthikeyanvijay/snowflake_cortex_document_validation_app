@@ -11,7 +11,7 @@ This repo contains a Snowflake-native document validation system that uses **Cor
 ![Document Validation Demo](resources/01-document-validation.gif)
 
 
-[More videos here](manual.md)
+[More videos here](manual.md). Sample email from the notification can be found [here](resources/sample_email.pdf) 
 
 
 ---
@@ -29,6 +29,7 @@ This repo contains a Snowflake-native document validation system that uses **Cor
 - **Comparison Matrix**: Side-by-side document comparison with compliance scoring
 - **Export Options**: Download results as CSV or JSON for further analysis
 - **Real-time Processing**: Instant document analysis with live status updates
+- **📧 Email Notifications**: HTML-formatted email reports with validation results and compliance summaries
 
 ### 🔧 **Enterprise-Ready**
 - **Snowflake Native**: Runs entirely within your Snowflake environment

@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 import pandas as pd
+import re
 from datetime import datetime
 from snowflake.snowpark.context import get_active_session
 from typing import Dict, List, Any, Optional
@@ -175,6 +176,93 @@ class FrostlogicApp:
             
         except Exception as e:
             return {"error": f"Processing failed: {str(e)}"}
+
+    def validate_email_addresses(self, email_string: str) -> tuple[bool, List[str], str]:
+        """
+        Validate comma-separated email addresses.
+        
+        Returns:
+            tuple: (is_valid, cleaned_emails, error_message)
+        """
+        if not email_string.strip():
+            return False, [], "Email addresses cannot be empty"
+        
+        # Split by comma and clean up
+        emails = [email.strip() for email in email_string.split(',') if email.strip()]
+        
+        if not emails:
+            return False, [], "No valid email addresses found"
+        
+        # Basic email validation regex
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        
+        invalid_emails = []
+        valid_emails = []
+        
+        for email in emails:
+            if re.match(email_pattern, email):
+                valid_emails.append(email)
+            else:
+                invalid_emails.append(email)
+        
+        if invalid_emails:
+            return False, [], f"Invalid email format: {', '.join(invalid_emails)}"
+        
+        return True, valid_emails, ""
+
+    def send_validation_email(self, results_json: Dict[str, Any], email_addresses: List[str], model_name: str) -> Dict[str, Any]:
+        """
+        Send validation email using the SEND_VALIDATION_EMAIL stored procedure.
+        
+        Returns:
+            dict: Response from the email procedure
+        """
+        try:
+            # Convert results to JSON string for procedure call
+            results_json_str = json.dumps(results_json)
+            
+            # Use Snowpark's DataFrame to safely pass parameters and avoid SQL injection
+            from snowflake.snowpark.functions import parse_json, lit, array_construct
+            from snowflake.snowpark.types import StringType, ArrayType
+            
+            # Create email array using Snowpark functions
+            email_literals = [lit(email) for email in email_addresses]
+            
+            # Use Snowpark SQL to call the procedure safely
+            sql = """
+            CALL SEND_VALIDATION_EMAIL(
+                RESULTS_JSON => PARSE_JSON(?),
+                EMAIL_ADDRESSES => ?,
+                EMAIL_INTEGRATION => 'ACCOUNT_EMAIL_INTEGRATION',
+                MODEL_NAME => ?
+            )
+            """
+            
+            # Build the email array as a string since Snowpark array handling can be tricky
+            email_array_str = "ARRAY_CONSTRUCT(" + ", ".join([f"'{email}'" for email in email_addresses]) + ")"
+            
+            # Execute with direct SQL since parameter binding is complex for VARIANT and ARRAY types
+            final_sql = f"""
+            CALL SEND_VALIDATION_EMAIL(
+                RESULTS_JSON => PARSE_JSON($${results_json_str}$$),
+                EMAIL_ADDRESSES => {email_array_str},
+                EMAIL_INTEGRATION => 'ACCOUNT_EMAIL_INTEGRATION',
+                MODEL_NAME => '{model_name}'
+            )
+            """
+            
+            result = self.session.sql(final_sql).collect()
+            
+            if result:
+                response_data = result[0]['SEND_VALIDATION_EMAIL']
+                if isinstance(response_data, str):
+                    response_data = json.loads(response_data)
+                return response_data
+            
+            return {"success": False, "message": "No response from email procedure"}
+            
+        except Exception as e:
+            return {"success": False, "message": f"Email sending failed: {str(e)}"}
 
     def display_results(self, results: Dict[str, Any]):
         """Display processing results with visualizations for multi-file analysis"""
@@ -425,6 +513,12 @@ class FrostlogicApp:
             st.session_state.processing_results = None
         if 'selected_files' not in st.session_state:
             st.session_state.selected_files = {}
+        if 'email_enabled' not in st.session_state:
+            st.session_state.email_enabled = False
+        if 'email_addresses' not in st.session_state:
+            st.session_state.email_addresses = ""
+        if 'email_status' not in st.session_state:
+            st.session_state.email_status = None
         
         # Sidebar configuration
         with st.sidebar:
@@ -644,11 +738,57 @@ class FrostlogicApp:
             else:
                 st.info("Configure document selection above")
         
+        # Advanced Options Section
+        with st.expander("🔧 Advanced Options", expanded=False):
+            st.markdown("### 📧 Email Notifications")
+            
+            # Email notification checkbox
+            email_enabled = st.checkbox(
+                "Email results when complete",
+                value=st.session_state.email_enabled,
+                key="email_checkbox",
+                help="Send an email notification with the validation results once processing is complete"
+            )
+            st.session_state.email_enabled = email_enabled
+            
+            # Email address input (only show if checkbox is enabled)
+            if email_enabled:
+                email_addresses = st.text_input(
+                    "Email addresses (comma-separated):",
+                    value=st.session_state.email_addresses,
+                    placeholder="user1@company.com, user2@company.com",
+                    help="💡 Enter valid email addresses that are configured in Snowflake. Only validated email addresses in Snowflake can receive notifications.",
+                    key="email_input"
+                )
+                st.session_state.email_addresses = email_addresses
+                
+                # Validate email addresses if provided
+                if email_addresses.strip():
+                    is_valid, valid_emails, error_msg = self.validate_email_addresses(email_addresses)
+                    if not is_valid:
+                        st.error(f"❌ {error_msg}")
+                        st.session_state.email_validation_error = error_msg
+                    else:
+                        st.success(f"✅ {len(valid_emails)} valid email address{'es' if len(valid_emails) > 1 else ''}")
+                        if 'email_validation_error' in st.session_state:
+                            del st.session_state.email_validation_error
+                else:
+                    if 'email_validation_error' in st.session_state:
+                        del st.session_state.email_validation_error
+        
         # Action buttons
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            process_disabled = len(selected_documents) == 0
+            # Check for email validation errors
+            has_email_error = 'email_validation_error' in st.session_state
+            email_enabled = st.session_state.get('email_enabled', False)
+            email_addresses = st.session_state.get('email_addresses', '').strip()
+            
+            # Disable processing if no documents or if email is enabled but has validation errors
+            process_disabled = (len(selected_documents) == 0 or 
+                              (email_enabled and (not email_addresses or has_email_error)))
+            
             button_text = "🚀 Process Documents" if len(selected_documents) > 1 else "🚀 Analyze Document"
             
             if st.button(button_text, disabled=process_disabled, use_container_width=True, type="primary"):
@@ -668,6 +808,11 @@ class FrostlogicApp:
         with col2:
             if st.button("🔄 Clear Results", use_container_width=True):
                 st.session_state.processing_results = None
+                st.session_state.email_status = None
+                # Clear email sent tracking keys
+                keys_to_clear = [key for key in st.session_state.keys() if key.startswith('email_sent_')]
+                for key in keys_to_clear:
+                    del st.session_state[key]
                 st.rerun()
         
         # Display results if available
@@ -675,6 +820,65 @@ class FrostlogicApp:
             st.markdown("---")
             st.subheader("📊 Processing Results")
             self.display_results(st.session_state.processing_results)
+            
+            # Handle email notifications if enabled
+            email_enabled = st.session_state.get('email_enabled', False)
+            email_addresses = st.session_state.get('email_addresses', '').strip()
+            results = st.session_state.processing_results
+            
+            # Only attempt email if checkbox is explicitly enabled
+            if email_enabled:
+                if email_addresses and results.get('success', False):
+                    # Only send email once per processing session
+                    email_sent_key = f"email_sent_{hash(str(results))}"
+                    
+                    if email_sent_key not in st.session_state:
+                        # Validate email addresses one more time
+                        is_valid, valid_emails, error_msg = self.validate_email_addresses(email_addresses)
+                        
+                        if is_valid:
+                            with st.spinner("📧 Sending email notification..."):
+                                model_to_use = st.session_state.get('selected_model', 'claude-4-sonnet')
+                                email_result = self.send_validation_email(results, valid_emails, model_to_use)
+                                st.session_state.email_status = email_result
+                                st.session_state[email_sent_key] = True
+                                st.rerun()
+                elif not email_addresses and results.get('success', False):
+                    # Email enabled but no addresses provided
+                    st.session_state.email_status = {
+                        "success": False, 
+                        "message": "Email notification enabled but no email addresses provided"
+                    }
+            else:
+                # Clear any previous email status when email is disabled
+                if 'email_status' in st.session_state:
+                    st.session_state.email_status = None
+            
+            # Display email status if available
+            if 'email_status' in st.session_state and st.session_state.email_status:
+                email_status = st.session_state.email_status
+                
+                if email_status.get('success', False):
+                    st.success(f"✅ {email_status.get('message', 'Email sent successfully!')}")
+                    with st.expander("📧 Email Details", expanded=False):
+                        details = email_status.get('details', {})
+                        email_details = details.get('email_details', {})
+                        st.write(f"**Recipients:** {', '.join(email_details.get('recipients', []))}")
+                        st.write(f"**Subject:** {email_details.get('subject', 'N/A')}")
+                        st.write(f"**Content Type:** {email_details.get('content_type', 'N/A')}")
+                        st.write(f"**Processing Time:** {details.get('processing_timestamp', 'N/A')}")
+                else:
+                    st.warning(f"⚠️ Email Warning: {email_status.get('message', 'Email sending failed')}")
+                    with st.expander("📧 Error Details", expanded=False):
+                        details = email_status.get('details', {})
+                        email_details = details.get('email_details', {})
+                        if 'error' in details:
+                            st.error(f"**Error:** {details['error']}")
+                        # For error cases, try both locations for recipients and integration
+                        recipients = email_details.get('recipients', []) or details.get('recipients', [])
+                        integration = email_details.get('integration_used', 'N/A') or details.get('integration_used', 'N/A')
+                        st.write(f"**Attempted Recipients:** {', '.join(recipients)}")
+                        st.write(f"**Integration Used:** {integration}")
 
 if __name__ == "__main__":
     app = FrostlogicApp()
