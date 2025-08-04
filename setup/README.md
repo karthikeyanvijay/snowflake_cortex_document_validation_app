@@ -51,6 +51,32 @@ snow sql -f 00_admin_setup.sql --connection admin_connection
 - **Database**: `FROSTLOGIC_DB` with ownership grants
 - **Privileges**: Account-level permissions for tasks and Cortex AI
 
+### 📧 Optional: Email Notification Setup (ACCOUNTADMIN Required)
+
+If you want to enable email notifications for document validation results, run these additional commands as **ACCOUNTADMIN**:
+
+#### Using Snow CLI:
+```sql
+# Create email notification integration
+snow sql -q "CREATE NOTIFICATION INTEGRATION ACCOUNT_EMAIL_INTEGRATION TYPE=EMAIL ENABLED=TRUE;" --connection admin_connection
+
+# Grant usage to Frostlogic role
+snow sql -q "GRANT USAGE ON INTEGRATION ACCOUNT_EMAIL_INTEGRATION TO ROLE FROSTLOGIC_ROLE;" --connection admin_connection
+```
+
+#### Using Snowsight:
+```sql
+-- Create email notification integration
+CREATE NOTIFICATION INTEGRATION ACCOUNT_EMAIL_INTEGRATION
+  TYPE=EMAIL
+  ENABLED=TRUE;
+
+-- Grant usage to Frostlogic role
+GRANT USAGE ON INTEGRATION ACCOUNT_EMAIL_INTEGRATION TO ROLE FROSTLOGIC_ROLE;
+```
+
+**Note**: Email notifications allow users to receive HTML-formatted reports with validation results directly in their inbox after document processing completes.
+
 ---
 
 ## 🛤️ Path A: Snow CLI Deployment
